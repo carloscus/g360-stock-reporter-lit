@@ -5,24 +5,32 @@
  *              Estrategias: cache-first (assets con hash), network-first (HTML).
  *              El API vive en otro origen: el SW no lo intercepta ni duplica
  *              sus requests (el polling lo orquesta app-root con probes ~1 KB).
- * @version 2.1.0
+ * @version 2.2.0
  */
 
-const CACHE_NAME = 'stockpulse-v5';
+// v6: limpia el cache con las entradas precacheadas bajo el prefijo del
+// nombre anterior del repo (g360-stock-reporter → g360-stock-reporter-lit).
+const CACHE_NAME = 'stockpulse-v6';
+
+// Base del sitio resuelta desde la ubicación del propio SW (mismo criterio que
+// pwa-register.js): así un renombrado del repo no rompe el precache ni el
+// matching de assets en el handler de fetch.
+const BASE = new URL('./', self.location);
+const ASSETS_PATH = `${BASE.pathname}assets/`;
 
 const STATIC_ASSETS = [
-  '/g360-stock-reporter/',
-  '/g360-stock-reporter/index.html',
-  '/g360-stock-reporter/exceljs.min.js',
-  '/g360-stock-reporter/g360-signature.js',
-  '/g360-stock-reporter/pwa-register.js',
-  '/g360-stock-reporter/favicon.svg',
-  '/g360-stock-reporter/favicon-32x32.png',
-  '/g360-stock-reporter/favicon-16x16.png',
-  '/g360-stock-reporter/apple-touch-icon.png',
-  '/g360-stock-reporter/icon-192.png',
-  '/g360-stock-reporter/icon-512.png',
-  '/g360-stock-reporter/manifest.json',
+  './',
+  './index.html',
+  './exceljs.min.js',
+  './g360-signature.js',
+  './pwa-register.js',
+  './favicon.svg',
+  './favicon-32x32.png',
+  './favicon-16x16.png',
+  './apple-touch-icon.png',
+  './icon-192.png',
+  './icon-512.png',
+  './manifest.json',
 ];
 
 // Instalación — precache estáticos (tolerante: un 404 no tumba el install)
@@ -58,7 +66,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   // Assets estáticos → cache-first
-  if (url.pathname.startsWith('/g360-stock-reporter/assets/') ||
+  if (url.pathname.startsWith(ASSETS_PATH) ||
       url.pathname.endsWith('.svg') ||
       url.pathname.endsWith('.png') ||
       url.pathname.endsWith('.js')) {

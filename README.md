@@ -13,7 +13,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  FRONTEND → GitHub Pages                                        │
-│  https://carloscus.github.io/g360-stock-reporter/               │
+│  https://carloscus.github.io/g360-stock-reporter-lit/           │
 │  · Lit 3 Web Components (app-root, pulso-form, estado-panel...) │
 │  · ExcelJS (generación de XLSX en browser)                      │
 │  · Fuse.js (búsqueda fuzzy)                                     │

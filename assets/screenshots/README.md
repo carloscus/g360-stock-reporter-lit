@@ -27,7 +27,7 @@ El script:
 
 ## Cómo capturar
 
-Ir a https://carloscus.github.io/g360-stock-reporter/ y capturar:
+Ir a https://carloscus.github.io/g360-stock-reporter-lit/ y capturar:
 
 1. **dashboard.png**
    - Pestaña "Estado" (💓)

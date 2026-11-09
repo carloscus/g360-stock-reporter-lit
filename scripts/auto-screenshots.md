@@ -20,7 +20,7 @@ Este script detecta imágenes en `assets/screenshots/`, las recorta al tamaño d
 
 ## Capturas sugeridas
 
-Ir a https://carloscus.github.io/g360-stock-reporter/ y capturar:
+Ir a https://carloscus.github.io/g360-stock-reporter-lit/ y capturar:
 
 1. **dashboard.png** - Pestaña "Estado" con KPIs visibles (total SKUs, cajas, estados)
 2. **alertas.png** - Pestaña "Alertas" con badges rojo/amarillo  

@@ -23,5 +23,5 @@
   "engines": {
     "node": ">=22.12"
   },
-  "homepage": "https://carloscus.github.io/g360-stock-reporter"
+  "homepage": "https://carloscus.github.io/g360-stock-reporter-lit"
 }

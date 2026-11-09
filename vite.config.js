@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export default defineConfig(({ command }) => ({
-  // Sub-ruta para GitHub Pages
-  base: command === 'serve' ? '/' : '/g360-stock-reporter/',
+  // Sub-ruta para GitHub Pages: debe coincidir con el nombre del repo
+  // (carloscus/g360-stock-reporter-lit → /g360-stock-reporter-lit/)
+  base: command === 'serve' ? '/' : '/g360-stock-reporter-lit/',
   server: {
     port: 3000,
     historyApiFallback: true,
