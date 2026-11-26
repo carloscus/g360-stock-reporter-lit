@@ -28,6 +28,144 @@ const HEALTH_TIMEOUT_MS = 5000;
 const LIMA_TZ_OFFSET_MS = -5 * 60 * 60 * 1000;
 
 let _loading = null;
+let _currentLoadId = 0;
+let _lastError = null;
+
+// Test-only: resetear estado interno del módulo entre pruebas.
+export function __resetLoadState() {
+  _loading = null;
+  _currentLoadId = 0;
+  _lastError = null;
+}
+
+/**
+ * Último error de carga de datos (red, forma, invariante o monotonía).
+ * Se expone vía getLastError() para que app-root lo refleje en la barra
+ * de estado sin que viaje por el store.
+ */
+export function getLastError() {
+  return _lastError;
+}
+
+function _setError(err) {
+  _lastError = err || null;
+}
+
+/**
+ * Valida estrictamente un payload completo del API antes de transformar o
+ * guardar. Es una función pura: no toca el store ni efectos laterales.
+ *
+ * Invariantes:
+ *  - items es array; metadata es objeto
+ *  - items.length === metadata.total_skus
+ *  - items=[] válido solo si total_skus===0 && metadata.enriquecido===true
+ *  - SKU único
+ *  - almacenes[].disponible/stock/predespacho finitos >= 0
+ *  - un_bx opcional, entero >= 1
+ *  - precio/peso_kg opcionales, finitos >= 0
+ *  - fecha_descarga ISO estricta con zona horaria, Date.parse finito y
+ *    sin rollover imposible (p.ej. 2026-02-30)
+ *  - Transformación idempotente
+ */
+export function validarSnapshotAPI(apiData) {
+  if (!apiData || typeof apiData !== 'object' || Array.isArray(apiData)) {
+    throw new Error('API payload debe ser un objeto');
+  }
+
+  const { items, metadata } = apiData;
+
+  if (!Array.isArray(items)) {
+    throw new Error('items debe ser un array');
+  }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    throw new Error('metadata debe ser un objeto');
+  }
+
+  // items=[] solo válido si total_skus===0 && enriquecido===true
+  if (items.length === 0) {
+    if (!(metadata.total_skus === 0 && metadata.enriquecido === true)) {
+      throw new Error('items vacío requiere total_skus===0 y enriquecido===true');
+    }
+  } else if (items.length !== metadata.total_skus) {
+    throw new Error('items.length !== metadata.total_skus');
+  }
+
+  const seenSkus = new Set();
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('cada item debe ser un objeto');
+    }
+    if (typeof item.sku !== 'string' || !item.sku) {
+      throw new Error('cada item requiere sku no vacío');
+    }
+    if (seenSkus.has(item.sku)) {
+      throw new Error(`SKU duplicado: ${item.sku}`);
+    }
+    seenSkus.add(item.sku);
+
+    const almacenes = item.almacenes;
+    if (almacenes !== undefined && almacenes !== null) {
+      if (!Array.isArray(almacenes)) {
+        throw new Error('almacenes debe ser array');
+      }
+      for (const a of almacenes) {
+        if (!a || typeof a !== 'object') {
+          throw new Error('cada almacén debe ser un objeto');
+        }
+        for (const campo of ['disponible', 'stock', 'predespacho']) {
+          const v = a[campo];
+          if (v !== undefined && v !== null) {
+            if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+              throw new Error(`almacenes[].${campo} debe ser finito >= 0`);
+            }
+          }
+        }
+      }
+    }
+
+    // un_bx opcional, entero >= 1
+    if (item.un_bx !== undefined && item.un_bx !== null) {
+      if (typeof item.un_bx !== 'number' || !Number.isInteger(item.un_bx) || item.un_bx < 1) {
+        throw new Error('un_bx debe ser entero >= 1');
+      }
+    }
+
+    // precio/peso_kg opcionales, finitos >= 0
+    for (const campo of ['precio', 'peso_kg']) {
+      const v = item[campo];
+      if (v !== undefined && v !== null) {
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+          throw new Error(`item.${campo} debe ser finito >= 0`);
+        }
+      }
+    }
+  }
+
+  // fecha_descarga: ISO estricta con zona horaria, Date.parse finito, sin rollover imposible
+  const fecha = metadata.fecha_descarga;
+  if (typeof fecha !== 'string' || !fecha) {
+    throw new Error('metadata.fecha_descarga ausente');
+  }
+  // ISO estricto: requiere zona horaria (Z o +/-HH:MM)
+  if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(fecha)) {
+    throw new Error('metadata.fecha_descarga requiere zona horaria');
+  }
+  const ts = Date.parse(fecha);
+  if (!Number.isFinite(ts)) {
+    throw new Error('metadata.fecha_descarga no es ISO válido');
+  }
+  // Detectar rollover imposible: Date.parse normaliza 2026-02-30 a 2 de marzo.
+  // Verificar que el día del mes exista (independiente del offset horario).
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(fecha);
+  if (m) {
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    if (d.getUTCDate() !== +m[3]) {
+      throw new Error('metadata.fecha_descarga tiene rollover de fecha imposible');
+    }
+  }
+
+  return true;
+}
 
 /**
  * ¿Estamos dentro de la ventana operativa del reporte (Lun-Sáb 07:00-22:59 hora Lima)?
@@ -282,10 +420,13 @@ export function transformAPIResponse(apiData) {
     stockMap[item.sku] = stock;
   }
 
+  // Nunca fabricar fecha con new Date(): usar metadata.fecha_descarga.
+  // transformAPIResponse es idempotente: misma entrada => misma salida.
+  const lastUpdated = apiData.metadata?.fecha_descarga || '';
   return {
     productos: sortByOrden(productos),
     stockMap,
-    lastUpdated: apiData.metadata?.fecha_descarga || new Date().toISOString(),
+    lastUpdated,
     totalAlmacenes: apiData.metadata?.total_almacenes || almacenesCount(apiData.items),
     totalSkus: productos.length,
     fuente: 'api',
@@ -305,44 +446,70 @@ function almacenesCount(items) {
 }
 
 /**
+ * Compara dos revisiones (fechas ISO) SOLO por Date.parse cuando ambas son válidas.
+ * - nueva < guardada => 'cached' (no sobrescribir)
+ *   nueva > guardada => 'newer'
+ *   iguales => 'equal'
+ * - si alguna no parsea => 'cached' si hay previa válida, 'error' si no
+ * Nunca compara cadenas ISO directamente.
+ */
+function _compararRevisiones(nueva, guardada) {
+  const tsNueva = nueva ? Date.parse(nueva) : NaN;
+  const tsGuardada = guardada ? Date.parse(guardada) : NaN;
+  const nuevaValida = Number.isFinite(tsNueva);
+  const guardadaValida = Number.isFinite(tsGuardada);
+
+  if (nuevaValida && guardadaValida) {
+    if (tsNueva < tsGuardada) return 'cached';
+    if (tsNueva > tsGuardada) return 'newer';
+    return 'equal';
+  }
+  if (guardadaValida) return 'cached';
+  return 'error';
+}
+
+/**
  * Carga datos con prioridad de cache + refresh en background si está stale (>15 min).
  *
  * @param {boolean} force - Si true, ignora cache y refresca desde API
  */
 export async function loadStockData(force = false) {
-  // 1. Cache (instantáneo). El refresh en background cuando los datos están
-  //    stale (>15 min) lo orquesta app-root vía setInterval + visibilitychange.
+  // 1. Cache (instantáneo).
   const mem = loadData();
-  if (mem && !force) return mem;
 
-  // 2. Evitar fetches concurrentes
-  if (_loading && !force) return _loading;
+  // 2. Un solo in-flight también para force: quitar bypass !force en _loading.
+  // Cualquier llamada (force o no) reutiliza la promesa en vuelo.
+  if (_loading) return _loading;
+  const loadId = ++_currentLoadId;
 
   _loading = (async () => {
     try {
       const apiData = await fetchFromAPI();
-      const newRevision = apiData.metadata?.fecha_descarga || apiData.metadata?.fecha_actualizacion || '';
-      const prevRevision = getMeta()?.revision;
+      const newRevision = apiData.metadata?.fecha_descarga || '';
+      const prev = getMeta();
+      const prevRevision = prev?.revision;
 
-      // Si el backend no regeneró el reporte (misma revision) Y su cache es válida,
-      // no notificar para evitar refrescos innecesarios de la UI (datos idénticos).
-      const cacheExpirado = apiData.metadata?.cache_expirado === true;
-      if (newRevision && prevRevision === newRevision && !cacheExpirado) {
-        console.log('[stock-service] Datos sin cambios, refresco omitido');
+      // Comparación de revisión SOLO por Date.parse cuando ambas fechas son válidas.
+      const cmp = _compararRevisiones(newRevision, prevRevision);
+      if (cmp === 'cached') {
+        // Nueva revisión no es mayor que la guardada: no sobrescribir.
         const cached = loadData();
         if (cached) return cached;
       }
-      if (cacheExpirado && newRevision && prevRevision === newRevision) {
-        console.log('[stock-service] Cache API expirado, forzando refresco a pesar de misma revision');
-      }
+
+      // Validar el payload ANTES de transformar/saveData
+      validarSnapshotAPI(apiData);
 
       const data = transformAPIResponse(apiData);
       saveData(data, { source: 'api', version: 'v1', revision: newRevision });
+      _setError(null);
       return data;
     } catch (error) {
       console.warn('[stock-service] API no disponible:', error.message);
+      _setError(error.message);
 
-      // Si hay datos locales, usarlos y continuar en background
+      // Con caché válida devolverla en error; sin caché devolver centinela
+      // {productos:[],fuente:'error',error} SIN persistir.
       const local = loadData();
       if (local) {
         console.log('[stock-service] Usando datos locales, refresh en background');
@@ -351,21 +518,29 @@ export async function loadStockData(force = false) {
       }
 
       console.error('[stock-service] Sin datos disponibles');
-      const data = {
+      return {
         productos: [],
         stockMap: {},
-        lastUpdated: new Date().toISOString(),
+        lastUpdated: '',
         totalAlmacenes: 0,
         totalSkus: 0,
         fuente: 'error',
         error: error.message,
       };
-      saveData(data, { source: 'error' });
-      return data;
     } finally {
-      _loading = null;
+      // finally limpia _loading solo si sigue siendo la promesa actual
+      if (_currentLoadId === loadId) {
+        _loading = null;
+      }
     }
   })();
+
+  // Si hay caché válida y no es force, devolverla tras esperar el intento
+  // del API (para que _lastError quede seteado si falla).
+  if (mem && !force) {
+    await _loading;
+    return mem;
+  }
 
   return _loading;
 }
@@ -373,6 +548,7 @@ export async function loadStockData(force = false) {
 /**
  * Refresh en background: actualiza datos sin bloquear la UI.
  * Se llama cuando los datos cumplen 15 min (frescura del API).
+ * Mantiene gate sobre _loading (no lanza fetch concurrente).
  */
 export function refreshInBackground() {
   if (_loading) return;

@@ -49,7 +49,9 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => k !== CACHE_NAME)
+          // Borrar solo cachés con prefijo 'stockpulse-' distintas de CACHE_NAME.
+          // Conservar 'stockpulse-v6' y cachés ajenas (otra-app-v1, etc.).
+          .filter((k) => k.startsWith('stockpulse-') && k !== CACHE_NAME)
           .map((k) => caches.delete(k))
       )
     ).then(() => self.clients.claim())
