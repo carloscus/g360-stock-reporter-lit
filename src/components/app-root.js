@@ -9,7 +9,7 @@
 
 import { LitElement, html, css } from 'lit';
 import { subscribe, isStale, getTimeAgo, getMeta } from '../core/stock-store.js';
-import { loadStockData, probeStockData, pingHealth, isBusinessHours, formatLimaTime, contarAlertas } from '../core/stock-service.js';
+import { loadStockData, getLastError, probeStockData, pingHealth, isBusinessHours, formatLimaTime, contarAlertas } from '../core/stock-service.js';
 import { loadSession, clearSession } from '../core/session.js';
 import './stock-header.js';
 import './login-view.js';
@@ -96,6 +96,8 @@ export class AppRoot extends LitElement {
     _isWakingAttempt: { type: Number },
     _isProbing: { type: Boolean },
     _updateAvailable: { type: Boolean },
+    _session: { type: Object },
+    _dataError: { type: String },
   };
 
   static styles = css`
@@ -533,6 +535,7 @@ export class AppRoot extends LitElement {
     this._updateAvailable = false;
     this._pendingQuery = null;
     this._session = loadSession();
+    this._dataError = null;
     this._dataStarted = false;
     this._pendingQuery = null;
     this._reportPrefill = null;
@@ -571,12 +574,18 @@ export class AppRoot extends LitElement {
    * Arranca la carga de datos y el sondeo del API. Se invoca al iniciar sesión
    * (y al arrancar si ya había sesión guardada).
    */
-  _startData() {
+  async _startData() {
     if (this._dataStarted) return;
     this._dataStarted = true;
 
-    // Cargar datos (devuelve cache al instante; refresh se gestiona abajo)
-    loadStockData();
+    // Cargar datos (devuelve cache al instante; refresh se gestiona abajo).
+    // Tras el await, leer getLastError(): éxito limpia el error, error lo fija.
+    // El error NO viaja por el store.
+    const data = await loadStockData();
+    this._dataError = getLastError() || null;
+    // Si no hay cache ni datos previos, usar el valor devuelto (puede ser centinela de error)
+    // para que la barra de estado refleje el error incluso sin store.
+    if (!this._stockData && data) this._stockData = data;
 
     // Ticker de UI: actualiza el contador "hace X" cada minuto sin tocar la red.
     if (!this._uiTicker) {
@@ -630,15 +639,16 @@ export class AppRoot extends LitElement {
     }
   }
 
-  _onLogin(e) {
+  async _onLogin(e) {
     this._session = { nombre: e.detail.nombre, email: e.detail.email };
     this.activeTab = 'pulso';
-    this._startData();
+    await this._startData();
   }
 
   _onLogout() {
     clearSession();
     this._session = null;
+    this._dataError = null;
     this.isSearchOpen = false;
     this.activeTab = 'pulso';
     this._stopData();
@@ -731,6 +741,9 @@ export class AppRoot extends LitElement {
     } finally {
       this._isRefreshing = false;
     }
+    // Tras el await, fijar/limpiar _dataError leyendo getLastError() (igual que _startData).
+    // Si loadStockData falla pero hay caché válida (no lanza), _lastError queda seteado.
+    this._dataError = getLastError() || null;
   }
 
   _applyTheme() {
@@ -881,20 +894,22 @@ export class AppRoot extends LitElement {
           ></stock-header>
 
           <!-- Status bar: frescura del reporte del servidor + copia local + botón fuerza-refresh -->
-          ${this._stockData ? html`
+          ${this._stockData || this._dataError ? html`
             <div
-              class="data-status ${this._isWaking ? 'waking' : this._isStale ? 'stale' : sinCatalogo ? 'sin-catalogo' : 'fresh'}"
-              title="${this._isWaking ? 'Servidor despertando (Render en frío)…' : (this._serverDate ? `Reporte del servidor: ${this._serverDateHMS}` : 'Sin reporte')}"
+              class="data-status ${this._dataError ? 'sin-catalogo' : this._isWaking ? 'waking' : this._isStale ? 'stale' : sinCatalogo ? 'sin-catalogo' : 'fresh'}"
+              title="${this._dataError ? `Error de datos: ${this._dataError}` : this._isWaking ? 'Servidor despertando (Render en frío)…' : (this._serverDate ? `Reporte del servidor: ${this._serverDateHMS}` : 'Sin reporte')}"
             >
               <span class="status-dot"></span>
               <span class="status-text">
-                ${this._isWaking
-                  ? `⏳ Servidor despertando${this._isWakingAttempt ? ` (intento ${this._isWakingAttempt})` : ''}… reintentando`
-                  : this._isStale
-                    ? `🔄 Reporte del servidor: hace ${this._dataAge || '>15 min'} — actualizando…`
-                    : sinCatalogo
-                      ? `⚠ Datos sin catálogo (un_bx/precio incompletos) · hace ${this._dataAge || '<1min'}`
-                      : `Reporte del sistema: hace ${this._dataAge || '<1min'}`}
+                ${this._dataError
+                  ? `⚠ Error de datos: ${this._dataError}`
+                  : this._isWaking
+                    ? `⏳ Servidor despertando${this._isWakingAttempt ? ` (intento ${this._isWakingAttempt})` : ''}… reintentando`
+                    : this._isStale
+                      ? `🔄 Reporte del servidor: hace ${this._dataAge || '>15 min'} — actualizando…`
+                      : sinCatalogo
+                        ? `⚠ Datos sin catálogo (un_bx/precio incompletos) · hace ${this._dataAge || '<1min'}`
+                        : `Reporte del sistema: hace ${this._dataAge || '<1min'}`}
                 ${this._localCopyAge ? html`
                   <span class="status-sub" title="Cuándo tu copia se descargó (localStorage)">
                     Tu copia local: ${this._localCopyAge} · ${this._localCopyHMS}

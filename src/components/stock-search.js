@@ -1000,18 +1000,32 @@ export class StockSearch extends LitElement {
     this.renderRoot.querySelector('.search-input')?.focus();
   }
 
+  /**
+   * Escapa HTML en cada fragmento de texto antes de insertar marcas.
+   * Conserva SOLO <mark> como markup: ningún atributo ni handler del texto
+   * original sobrevive (evita XSS en resultados del buscador).
+   */
+  _escapeHtml(texto) {
+    return String(texto)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   _applyFuseHighlight(text, matches, key) {
-    if (!matches) return text;
+    if (!matches) return this._escapeHtml(text);
     const match = matches.find(m => m.key === key);
-    if (!match) return text;
+    if (!match) return this._escapeHtml(text);
     let result = '';
     let lastIndex = 0;
     match.indices.forEach(([start, end]) => {
-      result += text.substring(lastIndex, start);
-      result += `<mark>${text.substring(start, end + 1)}</mark>`;
+      result += this._escapeHtml(text.substring(lastIndex, start));
+      result += `<mark>${this._escapeHtml(text.substring(start, end + 1))}</mark>`;
       lastIndex = end + 1;
     });
-    result += text.substring(lastIndex);
+    result += this._escapeHtml(text.substring(lastIndex));
     return result;
   }
 

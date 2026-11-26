@@ -551,6 +551,13 @@ export class PulsoForm extends LitElement {
     e.preventDefault();
     if (!this.stockData || this.isGenerating) return;
 
+    // Bloquear submit solo si fuente==='error' o productos no es array.
+    // El vacío legítimo (total_skus=0 && enriquecido=true) SÍ puede exportarse.
+    if (this.stockData.fuente === 'error' || !Array.isArray(this.stockData.productos)) {
+      this.errorMsg = 'No hay datos válidos para exportar.';
+      return;
+    }
+
     this.isGenerating = true;
     this.errorMsg = '';
     try {
@@ -740,7 +747,7 @@ export class PulsoForm extends LitElement {
         <button
           type="submit"
           class="submit-btn"
-          ?disabled=${this.isGenerating || !this.stockData}
+          ?disabled=${this.isGenerating || !this.stockData || this.stockData.fuente === 'error' || !Array.isArray(this.stockData.productos)}
         >
           ${this.isGenerating ? html`
             <span class="spinner"></span>

@@ -28,14 +28,23 @@ const KEYS = {
   meta: 'g360_stock_meta_v1',
 };
 
-const LOCAL_TTL = 7 * 24 * 60 * 60 * 1000; // 7 días
-const SESSION_TTL = 5 * 60 * 1000;         // 5 minutos
-const FRESHNESS_TTL = 15 * 60 * 1000;      // 15 minutos — API se actualiza cada ~15 min
+export const LOCAL_TTL = 7 * 24 * 60 * 60 * 1000; // 7 días
+export const SESSION_TTL = 5 * 60 * 1000;         // 5 minutos
+export const FRESHNESS_TTL = 15 * 60 * 1000;      // 15 minutos — API se actualiza cada ~15 min
 
 let _subscribers = new Set();
 let _cachedData = null;
 let _meta = null;
 let _stalenessTimer = null;
+
+// Test-only: resetear estado interno del módulo entre pruebas.
+export function __resetStoreState() {
+  _subscribers = new Set();
+  _cachedData = null;
+  _meta = null;
+  if (_stalenessTimer) clearTimeout(_stalenessTimer);
+  _stalenessTimer = null;
+}
 
 // ── Helpers seguros ────────────────────────────────────────────────
 function _safeGet(key) {
@@ -102,7 +111,8 @@ export function loadData() {
   if (sessionRaw) {
     try {
       const { ts, data } = JSON.parse(sessionRaw);
-      if (Date.now() - ts < SESSION_TTL) {
+      const meta = getMeta();
+      if (Date.now() - ts < SESSION_TTL && snapshotInternoValido(data, meta)) {
         _cachedData = data;
         return data;
       }
@@ -114,7 +124,8 @@ export function loadData() {
   if (localRaw) {
     try {
       const { ts, data } = JSON.parse(localRaw);
-      if (Date.now() - ts < LOCAL_TTL) {
+      const meta = getMeta();
+      if (Date.now() - ts < LOCAL_TTL && snapshotInternoValido(data, meta)) {
         _cachedData = data;
         _safeSessionSet(KEYS.session, JSON.stringify({ ts, data }));
         return data;
@@ -125,8 +136,25 @@ export function loadData() {
   return null;
 }
 
+// ── snapshotInternoValido: validación de datos para el store ────────
+// La revisión vive en meta.revision, NO en data.revision.
+// validarSnapshotAPI NO se aplica nunca a la caché.
+export function snapshotInternoValido(data, meta) {
+  if (!Array.isArray(data?.productos)) return false;
+  if (typeof meta?.revision !== 'string' || !meta.revision) return false;
+  if (data.fuente === 'error') return false;
+  return true;
+}
+
 // ── saveData: escribe en las 3 capas ──────────────────────────────
 export function saveData(data, meta = {}) {
+  // Rechazar (no-op + console.warn, sin notificar ni tocar _cachedData/_meta)
+  // lo que falle snapshotInternoValido.
+  if (!snapshotInternoValido(data, meta)) {
+    console.warn('[stock-store] saveData rechazado: snapshot inválido', { fuente: data?.fuente, revision: meta?.revision });
+    return;
+  }
+
   const ts = Date.now();
   const payload = { ts, data };
 
